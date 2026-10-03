@@ -76,11 +76,12 @@ st.title("🍷 Gestão Diária de Vendas")
 st.caption("Registo de visitas, clientes, acordos comerciais e agenda")
 
 # Separadores (Tabs)
-tab1, tab2, tab3, tab4 = st.tabs(
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
     [
         "➕ Novo Cliente",
         "📝 Registar Visita",
-        "📋 Histórico & Clientes",
+        "📋 Clientes & Histórico",
+        "✏️ Editar / Gerir Clientes",
         "📅 Agenda / To-Do",
     ]
 )
@@ -234,12 +235,116 @@ with tab3:
     conn.close()
 
 # ---------------------------------------------------------
-# TAB 4: AGENDA & TO-DO LIST
+# TAB 4: EDITAR / GERIR CLIENTES
 # ---------------------------------------------------------
 with tab4:
+    st.subheader("Editar Dados do Restaurante")
+
+    conn = get_db_connection()
+    df_editar = pd.read_sql_query("SELECT * FROM clientes", conn)
+
+    if df_editar.empty:
+        st.info("Ainda não há restaurantes para editar.")
+    else:
+        dict_clientes = {
+            f"{row['nome_restaurante']} ({row['cidade']})": row["id"]
+            for _, row in df_editar.iterrows()
+        }
+        rest_para_editar = st.selectbox(
+            "Seleciona o restaurante a alterar/eliminar:",
+            list(dict_clientes.keys()),
+        )
+
+        id_edit = dict_clientes[rest_para_editar]
+        dados_atuais = df_editar[df_editar["id"] == id_edit].iloc[0]
+
+        # Formulário preenchido com os dados atuais
+        with st.form("form_editar_cliente"):
+            novo_nome = st.text_input(
+                "Nome do Restaurante", value=dados_atuais["nome_restaurante"]
+            )
+            novo_responsavel = st.text_input(
+                "Responsável / Sommelier",
+                value=dados_atuais["responsavel"] or "",
+            )
+
+            col_t, col_c = st.columns(2)
+            with col_t:
+                novo_contacto = st.text_input(
+                    "Contacto", value=dados_atuais["contacto"] or ""
+                )
+            with col_c:
+                nova_cidade = st.text_input(
+                    "Cidade", value=dados_atuais["cidade"] or ""
+                )
+
+            estados_possiveis = [
+                "Prospeto",
+                "Em Negociação",
+                "Cliente Ativo",
+                "Sem Interesse",
+            ]
+            idx_estado = (
+                estados_possiveis.index(dados_atuais["estado"])
+                if dados_atuais["estado"] in estados_possiveis
+                else 0
+            )
+            novo_estado = st.selectbox(
+                "Estado da Relação", estados_possiveis, index=idx_estado
+            )
+
+            col_save, col_del = st.columns([1, 1])
+            with col_save:
+                btn_atualizar = st.form_submit_button("💾 Guardar Alterações")
+
+        if btn_atualizar:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE clientes 
+                SET nome_restaurante = ?, responsavel = ?, contacto = ?, cidade = ?, estado = ?
+                WHERE id = ?
+            """,
+                (
+                    novo_nome,
+                    novo_responsavel,
+                    novo_contacto,
+                    nova_cidade,
+                    novo_estado,
+                    id_edit,
+                ),
+            )
+            conn.commit()
+            st.success("Dados atualizados com sucesso!")
+            st.rerun()
+
+        st.divider()
+        # Zona de Eliminação
+        with st.expander("🚨 Zona de Perigo: Eliminar Restaurante"):
+            st.warning(
+                "Atenção: Ao eliminar um restaurante, as visitas e tarefas associadas também serão apagadas."
+            )
+            if st.button("❌ Eliminar Este Restaurante Permanentemente"):
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM interacoes WHERE cliente_id = ?", (id_edit,)
+                )
+                cursor.execute(
+                    "DELETE FROM tarefas WHERE cliente_id = ?", (id_edit,)
+                )
+                cursor.execute("DELETE FROM clientes WHERE id = ?", (id_edit,))
+                conn.commit()
+                st.success("Restaurante eliminado com sucesso!")
+                st.rerun()
+
+    conn.close()
+
+# ---------------------------------------------------------
+# TAB 5: AGENDA & TO-DO LIST
+# ---------------------------------------------------------
+with tab5:
     st.subheader("Agenda de Tarefas & Lembretes")
 
-    # Formulário para criar nova tarefa
     with st.form("form_nova_tarefa", clear_on_submit=True):
         st.write("**Criar Novo Lembrete / Tarefa**")
         titulo_tarefa = st.text_input(
@@ -297,7 +402,6 @@ with tab4:
     st.subheader("As Tuas Tarefas Pendentes")
 
     conn = get_db_connection()
-    # Query com JOIN para trazer o nome do restaurante
     query_tarefas = """
         SELECT t.id, t.titulo, t.data_limite, t.prioridade, t.concluida, c.nome_restaurante 
         FROM tarefas t
@@ -331,7 +435,6 @@ with tab4:
                 conn.commit()
                 st.rerun()
 
-    # Expandível para ver o histórico de tarefas concluídas
     with st.expander("Ver Tarefas Concluídas"):
         df_concluidas = pd.read_sql_query(
             "SELECT t.titulo, t.data_limite, c.nome_restaurante FROM tarefas t LEFT JOIN clientes c ON t.cliente_id = c.id WHERE t.concluida = 1 ORDER BY t.id DESC",
