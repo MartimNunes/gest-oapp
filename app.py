@@ -1,8 +1,9 @@
+import io
 import sqlite3
 import pandas as pd
 import streamlit as st
 
-# Configuração da página para telemóveis e computadores
+# Configuração da página
 st.set_page_config(
     page_title="Gestão de Vinhos & Clientes",
     page_icon="🍷",
@@ -50,7 +51,7 @@ def init_db():
     """
     )
 
-    # Tabela de Tarefas / Agenda / To-Do List
+    # Tabela de Tarefas
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS tarefas (
@@ -73,16 +74,17 @@ init_db()
 
 # --- INTERFACE PRINCIPAL ---
 st.title("🍷 Gestão Diária de Vendas")
-st.caption("Registo de visitas, clientes, acordos comerciais e agenda")
+st.caption("Registo de visitas, clientes, acordos comerciais, agenda e relatórios")
 
 # Separadores (Tabs)
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     [
         "➕ Novo Cliente",
         "📝 Registar Visita",
         "📋 Clientes & Histórico",
-        "✏️ Editar / Gerir Clientes",
+        "✏️ Editar Clientes",
         "📅 Agenda / To-Do",
+        "📊 Exportar / Excel",
     ]
 )
 
@@ -123,9 +125,7 @@ with tab1:
                 )
                 conn.commit()
                 conn.close()
-                st.success(
-                    f"Restaurante **{nome}** adicionado com sucesso!"
-                )
+                st.success(f"Restaurante **{nome}** adicionado com sucesso!")
                 st.rerun()
 
 # ---------------------------------------------------------
@@ -258,7 +258,6 @@ with tab4:
         id_edit = dict_clientes[rest_para_editar]
         dados_atuais = df_editar[df_editar["id"] == id_edit].iloc[0]
 
-        # Formulário preenchido com os dados atuais
         with st.form("form_editar_cliente"):
             novo_nome = st.text_input(
                 "Nome do Restaurante", value=dados_atuais["nome_restaurante"]
@@ -293,9 +292,7 @@ with tab4:
                 "Estado da Relação", estados_possiveis, index=idx_estado
             )
 
-            col_save, col_del = st.columns([1, 1])
-            with col_save:
-                btn_atualizar = st.form_submit_button("💾 Guardar Alterações")
+            btn_atualizar = st.form_submit_button("💾 Guardar Alterações")
 
         if btn_atualizar:
             cursor = conn.cursor()
@@ -319,7 +316,6 @@ with tab4:
             st.rerun()
 
         st.divider()
-        # Zona de Eliminação
         with st.expander("🚨 Zona de Perigo: Eliminar Restaurante"):
             st.warning(
                 "Atenção: Ao eliminar um restaurante, as visitas e tarefas associadas também serão apagadas."
@@ -449,3 +445,98 @@ with tab5:
                 )
 
     conn.close()
+
+# ---------------------------------------------------------
+# TAB 6: EXPORTAR DADOS (EXCEL & CSV)
+# ---------------------------------------------------------
+with tab6:
+    st.subheader("📊 Exportar Relatórios de Vendas & Visitas")
+    st.caption("Filtra por intervalo de datas e descarrega os teus dados.")
+
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        data_inicio = st.date_input("Data de Início")
+    with col_d2:
+        data_fim = st.date_input("Data de Fim")
+
+    conn = get_db_connection()
+
+    # Query das visitas/interações organizadas por data
+    query_visitas = f"""
+        SELECT 
+            i.data AS 'Data da Visita',
+            c.nome_restaurante AS 'Restaurante',
+            c.cidade AS 'Cidade',
+            c.responsavel AS 'Responsável',
+            c.contacto AS 'Contacto',
+            i.notas AS 'Notas da Reunião',
+            i.acordo AS 'Acordo / Resultado',
+            c.estado AS 'Estado Atual'
+        FROM interacoes i
+        JOIN clientes c ON i.cliente_id = c.id
+        WHERE i.data BETWEEN '{data_inicio}' AND '{data_fim}'
+        ORDER BY i.data DESC
+    """
+    df_relatorio_visitas = pd.read_sql_query(query_visitas, conn)
+
+    # Tabela completa de clientes
+    df_relatorio_clientes = pd.read_sql_query(
+        "SELECT nome_restaurante AS Restaurante, responsavel AS Responsável, contacto AS Contacto, cidade AS Cidade, estado AS Estado FROM clientes",
+        conn,
+    )
+
+    # Tabela de tarefas
+    df_relatorio_tarefas = pd.read_sql_query(
+        "SELECT t.data_limite AS 'Data Limite', t.titulo AS Tarefa, t.prioridade AS Prioridade, CASE WHEN t.concluida = 1 THEN 'Concluída' ELSE 'Pendente' END AS Estado, c.nome_restaurante AS Restaurante FROM tarefas t LEFT JOIN clientes c ON t.cliente_id = c.id",
+        conn,
+    )
+
+    conn.close()
+
+    st.write(
+        f"**Visitas Encontradas ({len(df_relatorio_visitas)}) no período selecionado:**"
+    )
+
+    if df_relatorio_visitas.empty:
+        st.warning("Nenhuma visita registada neste intervalo de datas.")
+    else:
+        st.dataframe(df_relatorio_visitas, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.write("### 📥 Descarregar Ficheiros")
+
+    # Gerar ficheiro Excel na memória
+    buffer_excel = io.BytesIO()
+    with pd.ExcelWriter(buffer_excel, engine="openpyxl") as writer:
+        df_relatorio_visitas.to_excel(
+            writer, sheet_name="Visitas e Acordos", index=False
+        )
+        df_relatorio_clientes.to_excel(
+            writer, sheet_name="Lista de Clientes", index=False
+        )
+        df_relatorio_tarefas.to_excel(
+            writer, sheet_name="Agenda de Tarefas", index=False
+        )
+
+    buffer_excel.seek(0)
+
+    # Converter visitas para CSV
+    csv_visitas = df_relatorio_visitas.to_csv(index=False).encode("utf-8")
+
+    col_btn1, col_btn2 = st.columns(2)
+
+    with col_btn1:
+        st.download_button(
+            label="📗 Descarregar Relatório Completo (.xlsx / Excel)",
+            data=buffer_excel,
+            file_name=f"relatorio_vinhos_{data_inicio}_a_{data_fim}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    with col_btn2:
+        st.download_button(
+            label="📄 Descarregar Visitas em CSV",
+            data=csv_visitas,
+            file_name=f"visitas_{data_inicio}_a_{data_fim}.csv",
+            mime="text/csv",
+        )
